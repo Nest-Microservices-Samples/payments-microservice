@@ -1,13 +1,22 @@
-import { Injectable } from '@nestjs/common';
-import { envs } from 'src/config';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { NATS_SERVICE, envs } from 'src/config';
 import { PaymentSessionDto } from './dto/payment-session.dto';
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
+import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
 export class PaymentsService {
 
     private readonly stripe = new Stripe(envs.stripeSecret)
+    private readonly logger = new Logger('PaymentsService');
+
+    constructor(
+
+        @Inject(NATS_SERVICE)
+        private readonly client: ClientProxy,
+
+    ) {}
 
     async createPaymentSession(paymentSessionDto: PaymentSessionDto) {
 
@@ -59,20 +68,27 @@ export class PaymentsService {
         const endpointSecret = envs.stripeEndpointSecret;
 
         try {
-            event = this.stripe.webhooks.constructEvent(req['rawBody'], sig, endpointSecret);
+            event = this.stripe.webhooks.constructEvent(
+                req['rawBody'],
+                sig,
+                endpointSecret
+            );
         } catch (err) {
             res.status(400).send(`Webhook Error: ${err.message}`);
             return;
         }
 
-        switch ( event.type ) {
+        switch (event.type) {
             case 'charge.succeeded':
                 const chargeSucceeded = event.data.object;
-                //TODO: Call our microservice
-                console.log({
-                    metadata: chargeSucceeded.metadata,
+                const payload = {
+                    stripePaymentId: chargeSucceeded.id,
                     orderId: chargeSucceeded.metadata.orderId,
-                });
+                    receipUrl: chargeSucceeded.receipt_url,
+                }
+
+                // this.logger.log({ payload });
+                this.client.emit('payment.succeeded', payload);
             break;
 
             default:
